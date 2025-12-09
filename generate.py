@@ -115,7 +115,7 @@ async def generate_slide(
         mime_type = "image/jpeg"
         
         for chunk in client.models.generate_content_stream(
-            model="gemini-2.0-flash-preview-image-generation",
+            model="gemini-3-pro-image-preview",
             contents=contents,
             config=generate_content_config,
         ):
@@ -197,7 +197,7 @@ async def enlarge_slide(
         mime_type = "image/jpeg"
         
         for chunk in client.models.generate_content_stream(
-            model="gemini-2.0-flash-preview-image-generation",
+            model="gemini-3-pro-image-preview",
             contents=contents,
             config=generate_content_config,
         ):
