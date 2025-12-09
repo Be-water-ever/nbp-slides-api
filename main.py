@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import os
 
-from generate import generate_slide, enlarge_slide
+from generate import generate_slide, enlarge_slide, extract_text_from_slide
 
 app = FastAPI(
     title="NBP Slides API",
@@ -48,6 +48,27 @@ class EnlargeRequest(BaseModel):
 class EnlargeResponse(BaseModel):
     success: bool
     image_url: Optional[str] = None
+    error: Optional[str] = None
+
+
+class TextBlock(BaseModel):
+    content: str
+    x_percent: float
+    y_percent: float
+    width_percent: float = 80
+    size: str = "medium"
+    align: str = "center"
+    color: str = "#333333"
+
+
+class OCRRequest(BaseModel):
+    api_key: str
+    image_url: str
+
+
+class OCRResponse(BaseModel):
+    success: bool
+    text_blocks: Optional[List[TextBlock]] = None
     error: Optional[str] = None
 
 
@@ -115,6 +136,38 @@ async def enlarge_endpoint(request: EnlargeRequest):
             )
     except Exception as e:
         return EnlargeResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+@app.post("/ocr", response_model=OCRResponse)
+async def ocr_endpoint(request: OCRRequest):
+    """
+    Extract text and positions from a slide image using Gemini Vision.
+    """
+    try:
+        result = await extract_text_from_slide(
+            api_key=request.api_key,
+            image_url=request.image_url,
+        )
+        
+        if result["success"]:
+            # Convert to TextBlock models
+            text_blocks = [
+                TextBlock(**block) for block in result.get("text_blocks", [])
+            ]
+            return OCRResponse(
+                success=True,
+                text_blocks=text_blocks
+            )
+        else:
+            return OCRResponse(
+                success=False,
+                error=result.get("error", "Unknown error")
+            )
+    except Exception as e:
+        return OCRResponse(
             success=False,
             error=str(e)
         )

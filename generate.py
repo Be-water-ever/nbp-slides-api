@@ -151,6 +151,95 @@ async def generate_slide(
         return {"success": False, "error": error_msg}
 
 
+async def extract_text_from_slide(
+    api_key: str,
+    image_url: str,
+) -> Dict[str, Any]:
+    """
+    Extract text and positions from a slide image using Gemini Vision.
+    
+    Args:
+        api_key: User's Gemini API key
+        image_url: URL of the slide image
+        
+    Returns:
+        Dict with success, text_blocks (list of {content, x_percent, y_percent, size, color}) or error
+    """
+    try:
+        client = genai.Client(api_key=api_key)
+        
+        # Download the image
+        image_bytes, mime_type = await download_image(image_url)
+        
+        # OCR prompt - ask Gemini to extract text with positioning
+        prompt = """分析这张幻灯片图片，识别所有可见的文字及其大致位置。
+
+请返回严格的 JSON 格式（不要包含其他文字）：
+{
+  "text_blocks": [
+    {
+      "content": "文字内容",
+      "x_percent": 50,
+      "y_percent": 30,
+      "width_percent": 80,
+      "size": "large",
+      "align": "center",
+      "color": "#333333"
+    }
+  ]
+}
+
+说明：
+- x_percent, y_percent: 文字中心点相对于图片宽高的百分比 (0-100)
+- width_percent: 文字块宽度占图片宽度的百分比
+- size: "large" (标题), "medium" (副标题), "small" (正文), "tiny" (注释)
+- align: "left", "center", "right"
+- color: 文字颜色的近似 hex 值
+
+如果没有检测到文字，返回: {"text_blocks": []}"""
+
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                    types.Part.from_text(text=prompt),
+                ],
+            )
+        ]
+        
+        # Use standard text generation (not image generation)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",  # Use flash for faster OCR
+            contents=contents,
+        )
+        
+        # Parse the response
+        response_text = response.text.strip()
+        
+        # Try to extract JSON from the response
+        import json
+        import re
+        
+        # Find JSON in the response (might be wrapped in markdown code blocks)
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            json_str = json_match.group()
+            result = json.loads(json_str)
+            text_blocks = result.get("text_blocks", [])
+            return {"success": True, "text_blocks": text_blocks}
+        else:
+            return {"success": True, "text_blocks": []}
+        
+    except json.JSONDecodeError as e:
+        print(f"JSON parse error: {e}, response: {response_text[:500]}")
+        return {"success": True, "text_blocks": []}
+    except Exception as e:
+        error_msg = str(e)
+        print(f"OCR error: {error_msg}")
+        return {"success": False, "error": error_msg}
+
+
 async def enlarge_slide(
     api_key: str,
     image_url: str,
