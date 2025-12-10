@@ -6,6 +6,8 @@ import os
 import uuid
 import httpx
 import mimetypes
+import json
+import re
 from typing import Optional, List, Dict, Any
 
 from google import genai
@@ -218,9 +220,6 @@ async def extract_text_from_slide(
         response_text = response.text.strip()
         
         # Try to extract JSON from the response
-        import json
-        import re
-        
         # Find JSON in the response (might be wrapped in markdown code blocks)
         json_match = re.search(r'\{[\s\S]*\}', response_text)
         if json_match:
