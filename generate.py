@@ -240,6 +240,110 @@ async def extract_text_from_slide(
         return {"success": False, "error": error_msg}
 
 
+async def remove_text_from_slide(
+    api_key: str,
+    image_url: str,
+) -> Dict[str, Any]:
+    """
+    Remove text from a slide image using Gemini, returning a clean background
+    and extracted text positions for HTML overlay.
+    
+    Args:
+        api_key: User's Gemini API key
+        image_url: URL of the slide image
+        
+    Returns:
+        Dict with success, clean_image_url, text_blocks or error
+    """
+    try:
+        # Step 1: Extract text positions using OCR
+        ocr_result = await extract_text_from_slide(api_key, image_url)
+        if not ocr_result["success"]:
+            return {"success": False, "error": f"OCR failed: {ocr_result.get('error', 'Unknown error')}"}
+        
+        text_blocks = ocr_result.get("text_blocks", [])
+        
+        # If no text found, return original image
+        if not text_blocks:
+            return {
+                "success": True,
+                "clean_image_url": image_url,
+                "text_blocks": [],
+            }
+        
+        # Step 2: Download the original image
+        image_bytes, mime_type = await download_image(image_url)
+        
+        # Step 3: Use Gemini to remove text from the image
+        client = genai.Client(api_key=api_key)
+        
+        prompt = """Remove ALL text from this slide image.
+Keep all visual elements, backgrounds, graphics, and design elements intact.
+Fill the areas where text was with the surrounding background naturally (content-aware fill).
+The result should look like the original slide but with no readable text.
+DO NOT add any new elements. Just remove the text cleanly."""
+
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                    types.Part.from_text(text=prompt),
+                ],
+            )
+        ]
+        
+        # Configure for image generation
+        image_config_dict = {"aspect_ratio": "16:9"}
+        
+        generate_content_config = types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            image_config=types.ImageConfig(**image_config_dict),
+        )
+        
+        # Generate clean image
+        clean_image_data = None
+        output_mime_type = "image/jpeg"
+        
+        for chunk in client.models.generate_content_stream(
+            model="gemini-3-pro-image-preview",
+            contents=contents,
+            config=generate_content_config,
+        ):
+            if not chunk.candidates or not chunk.candidates[0].content:
+                continue
+            
+            for part in chunk.candidates[0].content.parts:
+                if getattr(part, "inline_data", None) and part.inline_data.data:
+                    clean_image_data = part.inline_data.data
+                    output_mime_type = part.inline_data.mime_type or "image/jpeg"
+                    break
+            
+            if clean_image_data:
+                break
+        
+        if not clean_image_data:
+            return {"success": False, "error": "Failed to generate clean image"}
+        
+        # Step 4: Upload clean image to R2
+        ext = mimetypes.guess_extension(output_mime_type) or ".jpg"
+        filename = f"slides/clean_{uuid.uuid4()}{ext}"
+        clean_image_url = await upload_to_r2(clean_image_data, filename, output_mime_type)
+        
+        return {
+            "success": True,
+            "clean_image_url": clean_image_url,
+            "text_blocks": text_blocks,
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+            error_msg = "API quota exceeded. Please wait and try again."
+        
+        return {"success": False, "error": error_msg}
+
+
 async def enlarge_slide(
     api_key: str,
     image_url: str,

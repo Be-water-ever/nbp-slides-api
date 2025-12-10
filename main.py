@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import os
 
-from generate import generate_slide, enlarge_slide, extract_text_from_slide
+from generate import generate_slide, enlarge_slide, extract_text_from_slide, remove_text_from_slide
 
 app = FastAPI(
     title="NBP Slides API",
@@ -68,6 +68,18 @@ class OCRRequest(BaseModel):
 
 class OCRResponse(BaseModel):
     success: bool
+    text_blocks: Optional[List[TextBlock]] = None
+    error: Optional[str] = None
+
+
+class RemoveTextRequest(BaseModel):
+    api_key: str
+    image_url: str
+
+
+class RemoveTextResponse(BaseModel):
+    success: bool
+    clean_image_url: Optional[str] = None
     text_blocks: Optional[List[TextBlock]] = None
     error: Optional[str] = None
 
@@ -168,6 +180,40 @@ async def ocr_endpoint(request: OCRRequest):
             )
     except Exception as e:
         return OCRResponse(
+            success=False,
+            error=str(e)
+        )
+
+
+@app.post("/remove-text", response_model=RemoveTextResponse)
+async def remove_text_endpoint(request: RemoveTextRequest):
+    """
+    Remove text from a slide image and return clean background + text positions.
+    This allows rendering editable HTML text over a clean background.
+    """
+    try:
+        result = await remove_text_from_slide(
+            api_key=request.api_key,
+            image_url=request.image_url,
+        )
+        
+        if result["success"]:
+            # Convert to TextBlock models
+            text_blocks = [
+                TextBlock(**block) for block in result.get("text_blocks", [])
+            ]
+            return RemoveTextResponse(
+                success=True,
+                clean_image_url=result["clean_image_url"],
+                text_blocks=text_blocks
+            )
+        else:
+            return RemoveTextResponse(
+                success=False,
+                error=result.get("error", "Unknown error")
+            )
+    except Exception as e:
+        return RemoveTextResponse(
             success=False,
             error=str(e)
         )
