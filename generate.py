@@ -26,6 +26,8 @@ YUNWU_BASE_URL = os.environ.get("YUNWU_BASE_URL", "https://yunwu.ai/v1beta").rst
 YUNWU_OCR_MODEL = os.environ.get("YUNWU_OCR_MODEL", "gemini-2.0-flash")
 YUNWU_IMAGE_MODEL = os.environ.get("YUNWU_IMAGE_MODEL", "gemini-3-pro-image-preview")
 
+ENLARGE_IMAGE_SIZE = "4K"
+
 
 def _detect_provider(api_key: str) -> str:
     if api_key.startswith("AIza"):
@@ -160,6 +162,7 @@ async def generate_slide(
     api_key: str,
     prompt: str,
     aspect_ratio: str = "16:9",
+    image_size: str = "1K",
     asset_urls: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
@@ -202,7 +205,7 @@ async def generate_slide(
                 parts=parts,
                 generation_config={
                     "responseModalities": ["IMAGE"],
-                    "imageConfig": {"aspectRatio": aspect_ratio},
+                    "imageConfig": {"aspectRatio": aspect_ratio, "imageSize": image_size},
                 },
                 timeout_s=120.0,
             )
@@ -230,7 +233,7 @@ async def generate_slide(
             ]
             
             # Configure image generation
-            image_config_dict = {"aspect_ratio": aspect_ratio}
+            image_config_dict = {"aspect_ratio": aspect_ratio, "image_size": image_size}
             
             generate_content_config = types.GenerateContentConfig(
                 response_modalities=["IMAGE", "TEXT"],
@@ -546,7 +549,7 @@ async def enlarge_slide(
                 ],
                 generation_config={
                     "responseModalities": ["IMAGE"],
-                    "imageConfig": {"aspectRatio": "16:9"},
+                    "imageConfig": {"aspectRatio": "16:9", "imageSize": ENLARGE_IMAGE_SIZE},
                 },
                 timeout_s=180.0,
             )
@@ -565,7 +568,7 @@ async def enlarge_slide(
             ]
             
             # Configure for upscaling
-            image_config_dict = {"aspect_ratio": "16:9"}
+            image_config_dict = {"aspect_ratio": "16:9", "image_size": ENLARGE_IMAGE_SIZE}
             
             generate_content_config = types.GenerateContentConfig(
                 response_modalities=["IMAGE"],

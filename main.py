@@ -6,7 +6,7 @@ Deployed on Railway, called by Vercel frontend
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 import os
 
 from generate import generate_slide, enlarge_slide, extract_text_from_slide, remove_text_from_slide
@@ -31,6 +31,7 @@ class GenerateRequest(BaseModel):
     api_key: str
     prompt: str
     aspect_ratio: str = "16:9"
+    image_size: Literal["1K", "2K", "4K"] = "1K"
     asset_urls: Optional[List[str]] = None
 
 
@@ -105,6 +106,7 @@ async def generate_endpoint(request: GenerateRequest):
             api_key=request.api_key,
             prompt=request.prompt,
             aspect_ratio=request.aspect_ratio,
+            image_size=request.image_size,
             asset_urls=request.asset_urls,
         )
         
@@ -223,4 +225,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
