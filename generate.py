@@ -186,6 +186,9 @@ def _yunwu_extract_first_image(resp_json: Dict[str, Any]) -> tuple[bytes, str]:
     for cand in resp_json.get("candidates", []) or []:
         content = cand.get("content") or {}
         for part in content.get("parts", []) or []:
+            # Skip "thought" images; we want the final rendered output.
+            if part.get("thought") is True:
+                continue
             inline_data = part.get("inline_data") or part.get("inlineData")
             if not inline_data:
                 continue
@@ -195,6 +198,30 @@ def _yunwu_extract_first_image(resp_json: Dict[str, Any]) -> tuple[bytes, str]:
             mime_type = inline_data.get("mime_type") or inline_data.get("mimeType") or "image/jpeg"
             return _decode_b64(b64), mime_type
     raise ValueError("No image data in response")
+
+
+def _extract_last_non_thought_image_from_google_stream(chunks) -> tuple[Optional[bytes], str]:
+    """
+    Google GenAI image streams can include interim "thought" images.
+    Keep the last non-thought image part to avoid returning low-res intermediates.
+    """
+    image_data: Optional[bytes] = None
+    mime_type = "image/jpeg"
+
+    for chunk in chunks:
+        if not getattr(chunk, "candidates", None) or not chunk.candidates[0].content:
+            continue
+
+        for part in chunk.candidates[0].content.parts:
+            inline_data = getattr(part, "inline_data", None)
+            if not inline_data or not inline_data.data:
+                continue
+            if getattr(part, "thought", False):
+                continue
+            image_data = inline_data.data
+            mime_type = inline_data.mime_type or "image/jpeg"
+
+    return image_data, mime_type
 
 
 async def _yunwu_generate_content(
@@ -357,22 +384,12 @@ async def generate_slide(
             )
             
             # Generate image
-            for chunk in client.models.generate_content_stream(
+            stream = client.models.generate_content_stream(
                 model="gemini-3-pro-image-preview",
                 contents=contents,
                 config=generate_content_config,
-            ):
-                if not chunk.candidates or not chunk.candidates[0].content:
-                    continue
-                
-                for part in chunk.candidates[0].content.parts:
-                    if getattr(part, "inline_data", None) and part.inline_data.data:
-                        image_data = part.inline_data.data
-                        mime_type = part.inline_data.mime_type or "image/jpeg"
-                        break
-                
-                if image_data:
-                    break
+            )
+            image_data, mime_type = _extract_last_non_thought_image_from_google_stream(stream)
             
             if not image_data:
                 return {"success": False, "error": "No image generated"}
@@ -587,25 +604,12 @@ DO NOT add any new elements. Just remove the text cleanly."""
             )
             
             # Generate clean image
-            clean_image_data = None
-            output_mime_type = "image/jpeg"
-            
-            for chunk in client.models.generate_content_stream(
+            stream = client.models.generate_content_stream(
                 model="gemini-3-pro-image-preview",
                 contents=contents,
                 config=generate_content_config,
-            ):
-                if not chunk.candidates or not chunk.candidates[0].content:
-                    continue
-                
-                for part in chunk.candidates[0].content.parts:
-                    if getattr(part, "inline_data", None) and part.inline_data.data:
-                        clean_image_data = part.inline_data.data
-                        output_mime_type = part.inline_data.mime_type or "image/jpeg"
-                        break
-                
-                if clean_image_data:
-                    break
+            )
+            clean_image_data, output_mime_type = _extract_last_non_thought_image_from_google_stream(stream)
         
         if not clean_image_data:
             return {"success": False, "error": "Failed to generate clean image"}
@@ -693,25 +697,12 @@ async def enlarge_slide(
             )
             
             # Generate upscaled image
-            image_data = None
-            mime_type = "image/jpeg"
-            
-            for chunk in client.models.generate_content_stream(
+            stream = client.models.generate_content_stream(
                 model="gemini-3-pro-image-preview",
                 contents=contents,
                 config=generate_content_config,
-            ):
-                if not chunk.candidates or not chunk.candidates[0].content:
-                    continue
-                
-                for part in chunk.candidates[0].content.parts:
-                    if getattr(part, "inline_data", None) and part.inline_data.data:
-                        image_data = part.inline_data.data
-                        mime_type = part.inline_data.mime_type or "image/jpeg"
-                        break
-                
-                if image_data:
-                    break
+            )
+            image_data, mime_type = _extract_last_non_thought_image_from_google_stream(stream)
         
             if not image_data:
                 return {"success": False, "error": "No image generated"}
