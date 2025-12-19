@@ -55,6 +55,122 @@ def _decode_b64(b64_data: str) -> bytes:
     return base64.b64decode(b64_data)
 
 
+def _extract_png_dimensions(image_bytes: bytes) -> Optional[tuple[int, int]]:
+    # PNG signature + IHDR chunk
+    if len(image_bytes) < 24:
+        return None
+    if not image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    if image_bytes[12:16] != b"IHDR":
+        return None
+    width = int.from_bytes(image_bytes[16:20], "big")
+    height = int.from_bytes(image_bytes[20:24], "big")
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def _extract_jpeg_dimensions(image_bytes: bytes) -> Optional[tuple[int, int]]:
+    # Parse JPEG segments looking for SOF markers containing width/height.
+    if len(image_bytes) < 4:
+        return None
+    if not image_bytes.startswith(b"\xFF\xD8"):
+        return None
+
+    i = 2
+    sof_markers = {
+        0xC0,
+        0xC1,
+        0xC2,
+        0xC3,
+        0xC5,
+        0xC6,
+        0xC7,
+        0xC9,
+        0xCA,
+        0xCB,
+        0xCD,
+        0xCE,
+        0xCF,
+    }
+
+    while i < len(image_bytes):
+        if image_bytes[i] != 0xFF:
+            i += 1
+            continue
+
+        # Skip padding FFs
+        while i < len(image_bytes) and image_bytes[i] == 0xFF:
+            i += 1
+        if i >= len(image_bytes):
+            break
+
+        marker = image_bytes[i]
+        i += 1
+
+        # Start of scan / end of image
+        if marker in (0xDA, 0xD9):
+            break
+
+        if i + 2 > len(image_bytes):
+            break
+        segment_length = int.from_bytes(image_bytes[i : i + 2], "big")
+        if segment_length < 2:
+            break
+
+        segment_start = i + 2
+        segment_end = i + segment_length
+        if segment_end > len(image_bytes):
+            break
+
+        if marker in sof_markers:
+            # segment: [precision(1)][height(2)][width(2)]...
+            if segment_start + 5 <= len(image_bytes):
+                height = int.from_bytes(
+                    image_bytes[segment_start + 1 : segment_start + 3], "big"
+                )
+                width = int.from_bytes(
+                    image_bytes[segment_start + 3 : segment_start + 5], "big"
+                )
+                if width > 0 and height > 0:
+                    return width, height
+
+        i = segment_end
+
+    return None
+
+
+def _get_image_dimensions(image_bytes: bytes, mime_type: str) -> Optional[tuple[int, int]]:
+    mime = (mime_type or "").lower()
+    if "png" in mime:
+        return _extract_png_dimensions(image_bytes)
+    if "jpeg" in mime or "jpg" in mime:
+        return _extract_jpeg_dimensions(image_bytes)
+    # Fallback: try common formats by sniffing magic bytes
+    return _extract_png_dimensions(image_bytes) or _extract_jpeg_dimensions(image_bytes)
+
+
+def _infer_gemini_image_size_from_input(image_bytes: bytes, mime_type: str) -> str:
+    """
+    Infer the closest Gemini "image_size" label (1K/2K/4K) from the input image pixels.
+
+    For this project we primarily generate 16:9 slides, so we match against the known
+    16:9 outputs of Gemini 3 Pro Image Preview (1K/2K/4K).
+    """
+    dims = _get_image_dimensions(image_bytes, mime_type)
+    if not dims:
+        return "2K"
+
+    width, height = dims
+    candidates = [
+        ("1K", 1376, 768),
+        ("2K", 2752, 1536),
+        ("4K", 5504, 3072),
+    ]
+    best = min(candidates, key=lambda c: abs(width - c[1]) + abs(height - c[2]))
+    return best[0]
+
+
 def _yunwu_extract_text(resp_json: Dict[str, Any]) -> str:
     texts: List[str] = []
     for cand in resp_json.get("candidates", []) or []:
@@ -419,6 +535,7 @@ async def remove_text_from_slide(
         # Step 2: Download the original image
         image_bytes, mime_type = await download_image(image_url)
         provider = _detect_provider(api_key)
+        inferred_image_size = _infer_gemini_image_size_from_input(image_bytes, mime_type)
         
         prompt = """Remove ALL text from this slide image.
 Keep all visual elements, backgrounds, graphics, and design elements intact.
@@ -441,7 +558,7 @@ DO NOT add any new elements. Just remove the text cleanly."""
                 ],
                 generation_config={
                     "responseModalities": ["IMAGE"],
-                    "imageConfig": {"aspectRatio": "16:9"},
+                    "imageConfig": {"aspectRatio": "16:9", "imageSize": inferred_image_size},
                 },
                 timeout_s=180.0,
             )
@@ -462,7 +579,7 @@ DO NOT add any new elements. Just remove the text cleanly."""
             ]
             
             # Configure for image generation
-            image_config_dict = {"aspect_ratio": "16:9"}
+            image_config_dict = {"aspect_ratio": "16:9", "image_size": inferred_image_size}
             
             generate_content_config = types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
